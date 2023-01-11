@@ -778,7 +778,6 @@ pub struct TimeshiftRecorderConfig {
 
 impl TimeshiftRecorderConfig {
     const BUFSIZE: usize = 8192;
-    const TS_PACKET_SIZE: usize = 188;
 
     pub fn max_file_size(&self) -> u64 {
         (self.chunk_size as u64) * (self.num_chunks as u64)
@@ -847,11 +846,10 @@ impl TimeshiftRecorderConfig {
             name
         );
         assert!(
-            self.chunk_size % (Self::BUFSIZE * Self::TS_PACKET_SIZE) == 0,
-            "config.timeshift.recorders.{}: `chunk-size` must be a multiple of {}x{}",
+            self.chunk_size % Self::BUFSIZE == 0,
+            "config.timeshift.recorders.{}: `chunk-size` must be a multiple of {}",
             name,
-            Self::BUFSIZE,
-            Self::TS_PACKET_SIZE
+            Self::BUFSIZE
         );
         assert!(
             self.num_chunks > 2,
@@ -872,7 +870,7 @@ impl TimeshiftRecorderConfig {
     }
 
     fn default_chunk_size() -> usize {
-        Self::BUFSIZE * Self::TS_PACKET_SIZE * 100
+        Self::BUFSIZE * 20000 // 40K Blocks
     }
 
     fn default_num_reserves() -> usize {
@@ -2829,35 +2827,6 @@ mod tests {
             ts_file: "/ts.m2ts".to_string(),
             data_file: "/data.json".to_string(),
             chunk_size: 1,
-            num_chunks: 10,
-            num_reserves: TimeshiftRecorderConfig::default_num_reserves(),
-            priority: TimeshiftRecorderConfig::default_priority(),
-        };
-        config.validate("test");
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_timeshift_recorder_config_validate_chunk_size_8192() {
-        let config = TimeshiftRecorderConfig {
-            service_triple: (1.into(), 2.into(), 3.into()),
-            ts_file: "/ts.m2ts".to_string(),
-            data_file: "/data.json".to_string(),
-            chunk_size: 8192,
-            num_chunks: 10,
-            num_reserves: TimeshiftRecorderConfig::default_num_reserves(),
-            priority: TimeshiftRecorderConfig::default_priority(),
-        };
-        config.validate("test");
-    }
-
-    #[test]
-    fn test_timeshift_recorder_config_validate_chunk_size_1540096() {
-        let config = TimeshiftRecorderConfig {
-            service_triple: (1.into(), 2.into(), 3.into()),
-            ts_file: "/ts.m2ts".to_string(),
-            data_file: "/data.json".to_string(),
-            chunk_size: 1540096,
             num_chunks: 10,
             num_reserves: TimeshiftRecorderConfig::default_num_reserves(),
             priority: TimeshiftRecorderConfig::default_priority(),
