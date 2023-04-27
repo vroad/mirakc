@@ -88,8 +88,8 @@ where
                 }
                 write!(
                     buf,
-                    r#" group-title="{}", {}　"#,
-                    sv.channel.channel_type, sv.name
+                    r#" group-title="{}", {}-{}　"#,
+                    sv.channel.channel_type, sv.name, sv.id
                 )?;
             }
             0x02 | 0xA2 | 0xA6 => {
