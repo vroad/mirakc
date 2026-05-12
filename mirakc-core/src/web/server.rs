@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::http::Request;
@@ -9,6 +10,7 @@ use hyper_util::rt::TokioIo;
 use hyper_util::server;
 use tokio::net::TcpListener;
 use tokio::net::UnixListener;
+use tokio::time::sleep;
 use tower::Service;
 
 use actlet::Spawn;
@@ -17,6 +19,8 @@ use crate::config::Config;
 use crate::error::Error;
 
 use super::peer_info::PeerInfo;
+
+const LISTENER_RESTART_DELAY: Duration = Duration::from_secs(5);
 
 pub(super) async fn serve<W>(config: Arc<Config>, app: Router, spawner: W) -> Result<(), Error>
 where
@@ -41,11 +45,23 @@ where
 // See //examples/unix-domain-socket in tokio-rs/axum.
 
 macro_rules! listen {
-    ($listener:expr, $app:expr, $spawner:expr) => {
+    ($listener:expr, $app:expr, $spawner:expr) => {{
         let mut make_service = $app.into_make_service_with_connect_info::<PeerInfo>();
         loop {
-            let (socket, _remote_addr) = $listener.accept().await.unwrap();
-            let tower_service = make_service.call(&socket).await.unwrap();
+            let (socket, _remote_addr) = match $listener.accept().await {
+                Ok(result) => result,
+                Err(err) => {
+                    tracing::error!(?err, "Failed to accept connection");
+                    break;
+                }
+            };
+            let tower_service = match make_service.call(&socket).await {
+                Ok(service) => service,
+                Err(err) => {
+                    tracing::error!(?err, "Failed to create service for connection");
+                    continue;
+                }
+            };
             $spawner.spawn_task(async move {
                 let socket = TokioIo::new(socket);
                 let hyper_service =
@@ -63,26 +79,65 @@ macro_rules! listen {
                 }
             });
         }
-    };
+    }};
 }
 
 async fn http<W>(addr: std::net::SocketAddr, app: Router, spawner: W)
 where
-    W: Clone + Spawn,
+    W: Clone + Send + Spawn,
 {
-    let listener = TcpListener::bind(&addr).await.unwrap();
-    listen!(listener, app, spawner);
+    loop {
+        match TcpListener::bind(&addr).await {
+            Ok(listener) => {
+                tracing::info!(%addr, "HTTP listener started");
+                listen!(listener, app.clone(), spawner.clone());
+            }
+            Err(err) => {
+                tracing::error!(?err, %addr, "Failed to bind HTTP listener");
+            }
+        }
+
+        tracing::warn!(
+            %addr,
+            delay_secs = LISTENER_RESTART_DELAY.as_secs(),
+            "Restarting HTTP listener after delay"
+        );
+        sleep(LISTENER_RESTART_DELAY).await;
+    }
 }
 
 async fn uds<W>(path: PathBuf, app: Router, spawner: W)
 where
     W: Clone + Send + Spawn,
 {
+    loop {
+        match bind_uds(&path).await {
+            Ok(listener) => {
+                tracing::info!(path = %path.display(), "Unix-domain socket listener started");
+                listen!(listener, app.clone(), spawner.clone());
+            }
+            Err(err) => {
+                tracing::error!(?err, path = %path.display(), "Failed to bind Unix-domain socket listener");
+            }
+        }
+
+        tracing::warn!(
+            path = %path.display(),
+            delay_secs = LISTENER_RESTART_DELAY.as_secs(),
+            "Restarting Unix-domain socket listener after delay"
+        );
+        sleep(LISTENER_RESTART_DELAY).await;
+    }
+}
+
+async fn bind_uds(path: &std::path::Path) -> std::io::Result<UnixListener> {
     // Remove the socket if it exists.
-    let _ = tokio::fs::remove_file(&path).await;
-    tokio::fs::create_dir_all(path.parent().unwrap())
-        .await
-        .unwrap();
-    let listener = UnixListener::bind(path).unwrap();
-    listen!(listener, app, spawner);
+    let _ = tokio::fs::remove_file(path).await;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    UnixListener::bind(path)
 }
