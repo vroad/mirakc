@@ -1807,7 +1807,14 @@ pub(crate) mod stub {
             if let Some(expected_priority) = self.expected_priority {
                 assert_eq!(msg.user.priority, expected_priority);
             }
-            if msg.channel.channel == "ch" {
+            // The tuner-stream endpoint taps the tuner session that already feeds
+            // a timeshift recorder.  It must reuse that subscription instead of
+            // allocating a new tuner, so it has to pass the recorder's stream_id.
+            // Fail loudly if a regression drops it (which would grab a tuner).
+            if msg.channel.channel == "tuner-stream" {
+                assert_eq!(msg.stream_id, Some(TunerSubscriptionId::default()));
+            }
+            if msg.channel.channel == "ch" || msg.channel.channel == "tuner-stream" {
                 let (tx, stream) = BroadcasterStream::new_for_test();
                 let _ = tx.try_send(Bytes::from("0123456789"));
                 Ok(Ok(MpegTsStream::new(

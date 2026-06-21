@@ -1099,7 +1099,10 @@ async fn test_get_timeshift_tuner_stream() {
     let res = get("/api/timeshift/not_found/tuner-stream").await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
-    // A recorder that is not currently recording must not allocate a tuner.
+    // A recorder that is not currently recording must not allocate a tuner; the
+    // handler short-circuits before reaching the tuner manager.  The happy-path
+    // requests above additionally assert (in TunerManagerStub::StartStreaming)
+    // that the endpoint reuses the recorder's tuner subscription.
     let res = get("/api/timeshift/stopped/tuner-stream").await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }

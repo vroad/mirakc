@@ -37,9 +37,11 @@ impl Call<QueryTimeshiftRecorder> for TimeshiftManagerStub {
                 Ok(Ok(TimeshiftRecorderModel {
                     index: 0,
                     name: name.clone(),
-                    // Use channel "ch" so the TunerManagerStub feeds packets when
-                    // the tuner-stream endpoint taps the recorder's tuner.
-                    service: service!((1, 2), "test", channel_gr!("ch", "ch")),
+                    // Use a dedicated channel so the TunerManagerStub both feeds
+                    // packets and asserts that the tuner-stream endpoint reuses
+                    // this recorder's tuner subscription instead of allocating a
+                    // new tuner.
+                    service: service!((1, 2), "test", channel_gr!("test", "tuner-stream")),
                     start_time: None,
                     end_time: None,
                     duration: Duration::zero(),
