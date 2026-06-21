@@ -886,7 +886,11 @@ impl TunerSession {
     }
 
     fn is_subscribed(&self, id: &TunerSubscriptionId) -> bool {
-        self.subscribers.contains_key(&id.serial_number)
+        // The serial number must belong to this session.  Serial numbers restart
+        // at 1 for each session, so a stale ID from a previous session on the
+        // same physical tuner could otherwise match a newly created session.
+        // This mirrors the session-ID check in `unsubscribe`.
+        self.id == id.session_id && self.subscribers.contains_key(&id.serial_number)
     }
 
     fn is_reuseable(&self, channel: &EpgChannel) -> bool {
@@ -1498,6 +1502,12 @@ mod tests {
                 priority: 0.into(),
             });
             assert!(tuner.is_subscribed(&subscription.id));
+
+            // A stale ID with the same serial number but a different session ID
+            // must not match the live subscriber.
+            assert_eq!(dummy_id.serial_number, subscription.id.serial_number);
+            assert_ne!(dummy_id.session_id, subscription.id.session_id);
+            assert!(!tuner.is_subscribed(&dummy_id));
 
             let result = tuner.stop_streaming(subscription.id).await;
             assert!(result.is_ok());
