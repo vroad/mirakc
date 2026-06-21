@@ -1075,6 +1075,57 @@ async fn test_get_timeshift_stream() {
 }
 
 #[test(tokio::test)]
+async fn test_get_timeshift_tuner_stream() {
+    let res = get("/api/timeshift/test/tuner-stream").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_matches!(res.headers().get(ACCEPT_RANGES), Some(v) => {
+        assert_eq!(v, "none");
+    });
+    assert_matches!(res.headers().get(CONTENT_LENGTH), None);
+    assert_matches!(res.headers().get(CONTENT_TYPE), Some(v) => {
+        assert_eq!(v, "video/MP2T");
+    });
+    assert!(res.headers().contains_key(X_MIRAKURUN_TUNER_USER_ID));
+
+    let res = get("/api/timeshift/test/tuner-stream?decode=1").await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = get("/api/timeshift/test/tuner-stream?post-filters[]=mp4").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_matches!(res.headers().get(CONTENT_TYPE), Some(v) => {
+        assert_eq!(v, "video/mp4");
+    });
+
+    let res = get("/api/timeshift/not_found/tuner-stream").await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // A recorder that is not currently recording must not allocate a tuner.
+    let res = get("/api/timeshift/stopped/tuner-stream").await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[test(tokio::test)]
+async fn test_head_timeshift_tuner_stream() {
+    let res = head("/api/timeshift/test/tuner-stream").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_matches!(res.headers().get(ACCEPT_RANGES), Some(v) => {
+        assert_eq!(v, "none");
+    });
+    assert_matches!(res.headers().get(CONTENT_LENGTH), None);
+    assert_matches!(res.headers().get(CONTENT_TYPE), Some(v) => {
+        assert_eq!(v, "video/MP2T");
+    });
+
+    // The HEAD handler returns a positive response even when the recorder is
+    // not recording, just like the other streaming endpoints.
+    let res = head("/api/timeshift/stopped/tuner-stream").await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = head("/api/timeshift/not_found/tuner-stream").await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[test(tokio::test)]
 async fn test_get_timeshift_record_stream() {
     // recording
     let res = get("/api/timeshift/test/records/0/stream").await;

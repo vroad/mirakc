@@ -23,8 +23,8 @@ use crate::mpeg_ts_stream::MpegTsStream;
 
 type TunerStream = MpegTsStream<TunerSubscriptionId, BroadcasterStream>;
 
-#[derive(Clone, Copy, PartialEq)]
-#[cfg_attr(test, derive(Debug, Default))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(Default))]
 pub struct TunerSessionId {
     tuner_index: usize,
     session_number: u32,
@@ -47,8 +47,8 @@ impl fmt::Display for TunerSessionId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-#[cfg_attr(test, derive(Debug, Default))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(Default))]
 pub struct TunerSubscriptionId {
     session_id: TunerSessionId,
     serial_number: u32,
@@ -181,7 +181,9 @@ impl TunerManager {
                 self.event_emitters
                     .emit(Event::StatusChanged(tuner.index))
                     .await;
-                return Ok(tuner.subscribe(user));
+                // This subscription only taps an existing session; it doesn't
+                // occupy a dedicated tuner, so it must not affect `can_grab`.
+                return Ok(tuner.subscribe(user, true));
             }
             tracing::error!(tuner.index, %channel, %user.info, stream.id = %stream_id, "Specified tuner is unavailable");
             return Err(Error::TunerUnavailable);
@@ -201,7 +203,7 @@ impl TunerManager {
             self.event_emitters
                 .emit(Event::StatusChanged(tuner.index))
                 .await;
-            return Ok(tuner.subscribe(user));
+            return Ok(tuner.subscribe(user, false));
         }
 
         let found = self
@@ -214,7 +216,7 @@ impl TunerManager {
             self.event_emitters
                 .emit(Event::StatusChanged(tuner.index))
                 .await;
-            return Ok(tuner.subscribe(user));
+            return Ok(tuner.subscribe(user, false));
         }
 
         let found = self
@@ -230,7 +232,7 @@ impl TunerManager {
             self.event_emitters
                 .emit(Event::StatusChanged(tuner.index))
                 .await;
-            return Ok(tuner.subscribe(user));
+            return Ok(tuner.subscribe(user, false));
         }
 
         // No available tuner at this point.
@@ -251,7 +253,7 @@ impl TunerManager {
                 .emit(Event::StatusChanged(tuner.index))
                 .await;
             tuner.activate(channel, filters, ctx).await?;
-            return Ok(tuner.subscribe(user));
+            return Ok(tuner.subscribe(user, false));
         }
 
         tracing::warn!(%channel, %user.info, %user.priority, "No tuner available");
@@ -666,8 +668,8 @@ impl Tuner {
         self.activity.deactivate();
     }
 
-    fn subscribe(&mut self, user: &TunerUser) -> TunerSubscription {
-        let mut subscription = self.activity.subscribe(user);
+    fn subscribe(&mut self, user: &TunerUser, passive: bool) -> TunerSubscription {
+        let mut subscription = self.activity.subscribe(user, passive);
         subscription.decoded = self.decoded;
         subscription
     }
@@ -791,10 +793,10 @@ impl TunerActivity {
         }
     }
 
-    fn subscribe(&mut self, user: &TunerUser) -> TunerSubscription {
+    fn subscribe(&mut self, user: &TunerUser, passive: bool) -> TunerSubscription {
         match self {
             Self::Inactive => panic!("Must be activated before subscribing"),
-            Self::Active(session) => session.subscribe(user),
+            Self::Active(session) => session.subscribe(user, passive),
         }
     }
 
@@ -844,8 +846,16 @@ struct TunerSession {
     // Used for closing the tuner in order to take over the right to use it.
     pipeline: CommandPipeline<TunerSessionId>,
     broadcaster: Address<Broadcaster>,
-    subscribers: HashMap<u32, TunerUser>,
+    subscribers: HashMap<u32, Subscriber>,
     next_serial_number: u32,
+}
+
+struct Subscriber {
+    user: TunerUser,
+    // A passive subscriber only taps an already-justified session (e.g. the
+    // timeshift tuner-stream endpoint) instead of holding the tuner for its
+    // own sake, so it must not affect `can_grab`'s priority arbitration.
+    passive: bool,
 }
 
 impl TunerSession {
@@ -886,20 +896,26 @@ impl TunerSession {
     }
 
     fn is_subscribed(&self, id: &TunerSubscriptionId) -> bool {
-        self.subscribers.contains_key(&id.serial_number)
+        self.id == id.session_id && self.subscribers.contains_key(&id.serial_number)
     }
 
     fn is_reuseable(&self, channel: &EpgChannel) -> bool {
         self.channel.channel_type == channel.channel_type && self.channel.channel == channel.channel
     }
 
-    fn subscribe(&mut self, user: &TunerUser) -> TunerSubscription {
+    fn subscribe(&mut self, user: &TunerUser, passive: bool) -> TunerSubscription {
         let serial_number = self.next_serial_number;
         self.next_serial_number += 1;
 
         let id = TunerSubscriptionId::new(self.id, serial_number);
         tracing::debug!(subscription.id = %id, %user.info, "Subscribed");
-        self.subscribers.insert(serial_number, user.clone());
+        self.subscribers.insert(
+            serial_number,
+            Subscriber {
+                user: user.clone(),
+                passive,
+            },
+        );
 
         TunerSubscription::new(id, self.broadcaster.clone(), user.max_stuck_time())
     }
@@ -907,7 +923,8 @@ impl TunerSession {
     fn can_grab(&self, priority: TunerUserPriority) -> bool {
         self.subscribers
             .values()
-            .all(|user| priority > user.priority)
+            .filter(|subscriber| !subscriber.passive)
+            .all(|subscriber| priority > subscriber.user.priority)
     }
 
     async fn unsubscribe(&mut self, id: TunerSubscriptionId) -> Result<Option<TunerUser>, Error> {
@@ -915,7 +932,7 @@ impl TunerSession {
             tracing::warn!(subscription.id = %id, "Session ID unmatched, probably already deactivated");
             return Err(Error::SessionNotFound);
         }
-        let user = self.subscribers.remove(&id.serial_number);
+        let user = self.subscribers.remove(&id.serial_number).map(|s| s.user);
         match user {
             Some(ref user) => tracing::debug!(subscription.id = %id, %user.info, "Unsubscribed"),
             None => tracing::warn!(subscription.id = %id, "Not subscribed"),
@@ -929,13 +946,19 @@ impl TunerSession {
     }
 
     fn priority(&self) -> Option<TunerPriority> {
-        self.subscribers
-            .values()
-            .map(|user| user.priority)
+        // Use the same "non-passive subscribers only" view as `can_grab` so
+        // that grab arbitration (which compares `priority()` across tuners
+        // to pick the least important one to grab from) stays consistent
+        // with which tuners `can_grab` actually allows taking: a tuner held
+        // only by passive (tap) subscribers must look like the cheapest one
+        // to grab, not the most expensive.
+        let non_passive = || self.subscribers.values().filter(|s| !s.passive);
+        non_passive()
+            .map(|subscriber| subscriber.user.priority)
             .max()
             .map(|prio| TunerPriority {
                 highest_user_priority: prio,
-                num_users: self.subscribers.len(),
+                num_users: non_passive().count(),
             })
     }
 
@@ -945,7 +968,7 @@ impl TunerSession {
         let users = self
             .subscribers
             .values()
-            .map(|user| user.get_mirakurun_model())
+            .map(|subscriber| subscriber.user.get_mirakurun_model())
             .collect();
         (command, pids, users)
     }
@@ -1421,6 +1444,90 @@ mod tests {
     }
 
     #[test(tokio::test)]
+    async fn test_start_streaming_grab_lowest_priority_tuner_ignores_passive_subscriber() {
+        let config: Arc<Config> = Arc::new(
+            serde_norway::from_str(
+                r#"
+                tuners:
+                  - name: gr1
+                    types: [GR]
+                    command: >-
+                      sleep 1
+                  - name: gr2
+                    types: [GR]
+                    command: >-
+                      sleep 1
+                "#,
+            )
+            .unwrap(),
+        );
+
+        let system = System::new();
+        {
+            let manager = system.spawn_actor(TunerManager::new(config.clone())).await;
+
+            // Tuner 0 (gr1): a real, low-priority subscriber taps in, then
+            // leaves, so only the passive tap remains on the session.
+            let result = manager
+                .call(StartStreaming {
+                    channel: create_channel("0"),
+                    user: create_user(0.into()),
+                    stream_id: None,
+                })
+                .await;
+            let stream0 = assert_matches!(result, Ok(Ok(stream)) => {
+                assert_eq!(stream.id().session_id.tuner_index, 0);
+                stream
+            });
+
+            let result = manager
+                .call(StartStreaming {
+                    channel: create_channel("0"),
+                    user: create_user(TunerUserPriority::GRAB),
+                    stream_id: Some(stream0.id()),
+                })
+                .await;
+            let _tap0 = assert_matches!(result, Ok(Ok(stream)) => {
+                assert_eq!(stream.id().session_id.tuner_index, 0);
+                stream
+            });
+
+            manager.emit(StopStreaming { id: stream0.id() }).await;
+
+            // Tuner 1 (gr2): a real, low-priority subscriber, no tap.
+            let result = manager
+                .call(StartStreaming {
+                    channel: create_channel("1"),
+                    user: create_user(0.into()),
+                    stream_id: None,
+                })
+                .await;
+            let _stream1 = assert_matches!(result, Ok(Ok(stream)) => {
+                assert_eq!(stream.id().session_id.tuner_index, 1);
+                stream
+            });
+
+            // A new request must grab tuner 0, which holds nobody but a
+            // passive tap, rather than tuner 1, which would evict a real
+            // viewer.  Before excluding passive subscribers from
+            // `priority()`, the passive tap's `GRAB` priority made tuner 0
+            // look like the *most* important tuner to keep, so tuner 1's
+            // real, low-priority viewer was grabbed from instead.
+            let result = manager
+                .call(StartStreaming {
+                    channel: create_channel("2"),
+                    user: create_user(1.into()),
+                    stream_id: None,
+                })
+                .await;
+            assert_matches!(result, Ok(Ok(stream)) => {
+                assert_eq!(stream.id().session_id.tuner_index, 0);
+            });
+        }
+        system.shutdown().await;
+    }
+
+    #[test(tokio::test)]
     async fn test_excluded_channel() {
         let system = System::new();
 
@@ -1490,14 +1597,24 @@ mod tests {
             assert!(result.is_ok());
             assert!(!tuner.is_subscribed(&dummy_id));
 
-            let subscription = tuner.subscribe(&TunerUser {
-                info: TunerUserInfo::Web {
-                    id: "".to_string(),
-                    agent: None,
+            let subscription = tuner.subscribe(
+                &TunerUser {
+                    info: TunerUserInfo::Web {
+                        id: "".to_string(),
+                        agent: None,
+                    },
+                    priority: 0.into(),
                 },
-                priority: 0.into(),
-            });
+                false,
+            );
             assert!(tuner.is_subscribed(&subscription.id));
+
+            // A foreign tuner subscription ID that happens to share the same
+            // `serial_number` but belongs to a different session must not be
+            // treated as subscribed.
+            let foreign_id =
+                TunerSubscriptionId::new(TunerSessionId::new(0), subscription.id.serial_number);
+            assert!(!tuner.is_subscribed(&foreign_id));
 
             let result = tuner.stop_streaming(subscription.id).await;
             assert!(result.is_ok());
@@ -1575,13 +1692,16 @@ mod tests {
 
             let result = tuner.activate(&create_channel("1"), vec![], &system).await;
             assert!(result.is_ok());
-            let subscription = tuner.subscribe(&TunerUser {
-                info: TunerUserInfo::Web {
-                    id: "".to_string(),
-                    agent: None,
+            let subscription = tuner.subscribe(
+                &TunerUser {
+                    info: TunerUserInfo::Web {
+                        id: "".to_string(),
+                        agent: None,
+                    },
+                    priority: 0.into(),
                 },
-                priority: 0.into(),
-            });
+                false,
+            );
 
             let result = tuner.stop_streaming(Default::default()).await;
             assert_matches!(result, Err(Error::SessionNotFound));
@@ -1608,26 +1728,60 @@ mod tests {
                 .activate(&create_channel("1"), vec![], &system)
                 .await
                 .unwrap();
-            tuner.subscribe(&create_user(0.into()));
+            tuner.subscribe(&create_user(0.into()), false);
 
             assert!(!tuner.can_grab(0.into()));
             assert!(tuner.can_grab(1.into()));
             assert!(tuner.can_grab(2.into()));
             assert!(tuner.can_grab(TunerUserPriority::GRAB));
 
-            tuner.subscribe(&create_user(1.into()));
+            tuner.subscribe(&create_user(1.into()), false);
 
             assert!(!tuner.can_grab(0.into()));
             assert!(!tuner.can_grab(1.into()));
             assert!(tuner.can_grab(2.into()));
             assert!(tuner.can_grab(TunerUserPriority::GRAB));
 
-            tuner.subscribe(&create_user(TunerUserPriority::GRAB));
+            tuner.subscribe(&create_user(TunerUserPriority::GRAB), false);
 
             assert!(!tuner.can_grab(0.into()));
             assert!(!tuner.can_grab(1.into()));
             assert!(!tuner.can_grab(2.into()));
             assert!(tuner.can_grab(TunerUserPriority::GRAB));
+
+            tokio::task::yield_now().await;
+        }
+        system.shutdown().await;
+    }
+
+    #[test(tokio::test)]
+    async fn test_tuner_can_grab_ignores_passive_subscriber() {
+        let system = System::new();
+        {
+            let config = create_config("true".to_string());
+            let mut tuner = Tuner::new(0, &config);
+            assert!(tuner.can_grab(0.into()));
+
+            tuner
+                .activate(&create_channel("1"), vec![], &system)
+                .await
+                .unwrap();
+
+            // A passive (tap) subscriber, even at the highest priority, must
+            // not raise the bar for `can_grab`: it doesn't hold the tuner for
+            // its own sake, so it shouldn't block others from grabbing it.
+            tuner.subscribe(&create_user(TunerUserPriority::GRAB), true);
+            assert!(tuner.can_grab(0.into()));
+            assert!(tuner.can_grab(1.into()));
+            assert!(tuner.can_grab(TunerUserPriority::GRAB));
+
+            // A regular (non-passive) subscriber at the same priority does
+            // block `can_grab`, as before.  `TunerUserPriority::GRAB` itself
+            // is excluded from this check: `Tuner::can_grab` always allows
+            // GRAB-priority requests to succeed regardless of subscribers.
+            tuner.subscribe(&create_user(TunerUserPriority::GRAB), false);
+            assert!(!tuner.can_grab(0.into()));
+            assert!(!tuner.can_grab(1.into()));
 
             tokio::task::yield_now().await;
         }
@@ -1647,22 +1801,51 @@ mod tests {
                 .await
                 .unwrap();
 
-            tuner.subscribe(&create_user(0.into()));
+            tuner.subscribe(&create_user(0.into()), false);
             assert_matches!(tuner.priority(), Some(prio) => {
                 assert_eq!(prio.highest_user_priority, 0.into());
                 assert_eq!(prio.num_users, 1);
             });
 
-            tuner.subscribe(&create_user(10.into()));
+            tuner.subscribe(&create_user(10.into()), false);
             assert_matches!(tuner.priority(), Some(prio) => {
                 assert_eq!(prio.highest_user_priority, 10.into());
                 assert_eq!(prio.num_users, 2);
             });
 
-            tuner.subscribe(&create_user(5.into()));
+            tuner.subscribe(&create_user(5.into()), false);
             assert_matches!(tuner.priority(), Some(prio) => {
                 assert_eq!(prio.highest_user_priority, 10.into());
                 assert_eq!(prio.num_users, 3);
+            });
+        }
+        system.shutdown().await;
+    }
+
+    #[test(tokio::test)]
+    async fn test_tuner_priority_ignores_passive_subscriber() {
+        let system = System::new();
+        {
+            let config = create_config("true".to_string());
+            let mut tuner = Tuner::new(0, &config);
+
+            tuner
+                .activate(&create_channel("1"), vec![], &system)
+                .await
+                .unwrap();
+
+            // A tuner held only by a passive (tap) subscriber must report no
+            // priority at all, i.e. look like the cheapest possible tuner to
+            // grab, not the most expensive one.
+            tuner.subscribe(&create_user(TunerUserPriority::GRAB), true);
+            assert_matches!(tuner.priority(), None);
+
+            // Once a real subscriber joins, priority reflects only the real
+            // (non-passive) subscribers.
+            tuner.subscribe(&create_user(0.into()), false);
+            assert_matches!(tuner.priority(), Some(prio) => {
+                assert_eq!(prio.highest_user_priority, 0.into());
+                assert_eq!(prio.num_users, 1);
             });
         }
         system.shutdown().await;
@@ -1807,6 +1990,8 @@ pub(crate) mod stub {
             if let Some(expected_priority) = self.expected_priority {
                 assert_eq!(msg.user.priority, expected_priority);
             }
+            // Send one dummy TS packet only for channel "ch"; some tests (e.g. the
+            // timeshift tuner-stream stub) rely on this to make streaming succeed.
             if msg.channel.channel == "ch" {
                 let (tx, stream) = BroadcasterStream::new_for_test();
                 let _ = tx.try_send(Bytes::from("0123456789"));

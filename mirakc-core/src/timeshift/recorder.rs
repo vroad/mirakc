@@ -258,6 +258,10 @@ impl<T> TimeshiftRecorder<T> {
             pipeline,
             recording: self.recording,
             current_record_id: self.current_record_id,
+            tuner_subscription_id: self
+                .session
+                .as_ref()
+                .map(|session| *session.pipeline.id()),
         }
     }
 
