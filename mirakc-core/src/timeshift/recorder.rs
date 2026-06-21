@@ -258,6 +258,10 @@ impl<T> TimeshiftRecorder<T> {
             pipeline,
             recording: self.recording,
             current_record_id: self.current_record_id,
+            tuner_subscription_id: self
+                .session
+                .as_ref()
+                .map(|session| session.tuner_subscription_id),
         }
     }
 
@@ -382,7 +386,8 @@ where
         let template = mustache::compile_str(&self.config.timeshift.command)?;
         cmds.push(template.render_data_to_string(&data)?);
 
-        let mut pipeline = spawn_pipeline(cmds, stream.id(), "timeshift", ctx)?;
+        let tuner_subscription_id = stream.id();
+        let mut pipeline = spawn_pipeline(cmds, tuner_subscription_id, "timeshift", ctx)?;
 
         let (input, output) = pipeline.take_endpoints();
 
@@ -392,6 +397,7 @@ where
 
         self.session = Some(TimeshiftRecorderSession {
             pipeline,
+            tuner_subscription_id,
             _stop_trigger: stop_trigger,
         });
 
@@ -913,6 +919,7 @@ impl<T> TimeshiftRecorder<T> {
 
 struct TimeshiftRecorderSession {
     pipeline: CommandPipeline<TunerSubscriptionId>,
+    tuner_subscription_id: TunerSubscriptionId,
     _stop_trigger: Trigger<StopStreaming>,
 }
 

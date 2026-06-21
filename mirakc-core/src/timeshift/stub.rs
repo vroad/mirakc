@@ -37,7 +37,9 @@ impl Call<QueryTimeshiftRecorder> for TimeshiftManagerStub {
                 Ok(Ok(TimeshiftRecorderModel {
                     index: 0,
                     name: name.clone(),
-                    service: service!((1, 2), "test", channel_gr!("test", "test")),
+                    // Use channel "ch" so the TunerManagerStub feeds packets when
+                    // the tuner-stream endpoint taps the recorder's tuner.
+                    service: service!((1, 2), "test", channel_gr!("ch", "ch")),
                     start_time: None,
                     end_time: None,
                     duration: Duration::zero(),
@@ -45,6 +47,24 @@ impl Call<QueryTimeshiftRecorder> for TimeshiftManagerStub {
                     pipeline: vec![],
                     recording: true,
                     current_record_id: None,
+                    tuner_subscription_id: Some(Default::default()),
+                }))
+            }
+            // A recorder that exists but is not currently recording, so there is
+            // no tuner output to observe.
+            TimeshiftRecorderQuery::ByName(ref name) if name == "stopped" => {
+                Ok(Ok(TimeshiftRecorderModel {
+                    index: 0,
+                    name: name.clone(),
+                    service: service!((1, 2), "test", channel_gr!("test", "test")),
+                    start_time: None,
+                    end_time: None,
+                    duration: Duration::zero(),
+                    num_records: 0,
+                    pipeline: vec![],
+                    recording: false,
+                    current_record_id: None,
+                    tuner_subscription_id: None,
                 }))
             }
             _ => Ok(Err(Error::RecordNotFound)),

@@ -216,6 +216,14 @@ where
             .route(
                 "/timeshift/{recorder}/records/{id}/stream",
                 routing::get(timeshift::records::stream),
+            )
+            // Taps the tuner output feeding the recorder.  The GET handler
+            // reuses the recorder's existing tuner subscription and never
+            // allocates a tuner; the HEAD handler allocates nothing.
+            .route(
+                "/timeshift/{recorder}/tuner-stream",
+                routing::get(timeshift::tuner_stream::get)
+                    .head(timeshift::tuner_stream::head),
             );
     }
 
@@ -268,6 +276,8 @@ where
         timeshift::list,
         timeshift::get,
         timeshift::stream,
+        timeshift::tuner_stream::get,
+        timeshift::tuner_stream::head,
         timeshift::records::list,
         timeshift::records::get,
         timeshift::records::stream,

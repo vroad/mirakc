@@ -23,8 +23,8 @@ use crate::mpeg_ts_stream::MpegTsStream;
 
 type TunerStream = MpegTsStream<TunerSubscriptionId, BroadcasterStream>;
 
-#[derive(Clone, Copy, PartialEq)]
-#[cfg_attr(test, derive(Debug, Default))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(Default))]
 pub struct TunerSessionId {
     tuner_index: usize,
     session_number: u32,
@@ -47,8 +47,8 @@ impl fmt::Display for TunerSessionId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-#[cfg_attr(test, derive(Debug, Default))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(Default))]
 pub struct TunerSubscriptionId {
     session_id: TunerSessionId,
     serial_number: u32,

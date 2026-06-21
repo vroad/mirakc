@@ -22,6 +22,7 @@ use crate::error::Error;
 use crate::models::ContentRange;
 use crate::models::TimeshiftRecordId;
 use crate::mpeg_ts_stream::MpegTsStream;
+use crate::tuner::TunerSubscriptionId;
 
 #[derive(Debug)]
 pub struct TimeshiftRecorderModel {
@@ -35,6 +36,9 @@ pub struct TimeshiftRecorderModel {
     pub pipeline: Vec<CommandPipelineProcessModel>,
     pub recording: bool,
     pub current_record_id: Option<TimeshiftRecordId>,
+    // The tuner subscription that feeds the active recording session, if any.
+    // Used to tap the same tuner output without allocating a new tuner.
+    pub tuner_subscription_id: Option<TunerSubscriptionId>,
 }
 
 pub struct TimeshiftRecordModel {
