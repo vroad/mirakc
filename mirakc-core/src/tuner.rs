@@ -260,10 +260,6 @@ impl TunerManager {
         Err(Error::TunerUnavailable)
     }
 
-    fn deactivate_tuner(&mut self, id: TunerSubscriptionId) {
-        self.tuners[id.session_id.tuner_index].deactivate();
-    }
-
     async fn stop_streaming(
         &mut self,
         id: TunerSubscriptionId,
@@ -489,7 +485,12 @@ impl Handler<StartStreaming> for TunerManager {
             }
             Err(err) => {
                 tracing::error!(%err, %subscription.id, "Broadcaster may have stopped");
-                self.deactivate_tuner(subscription.id);
+                // Only tear down this failed subscription, not the whole
+                // session: `stop_streaming` deactivates the tuner itself
+                // solely when no subscriber remains, so other subscribers
+                // sharing this session (e.g. a still-recording timeshift
+                // recorder) are left untouched.
+                let _ = self.stop_streaming(subscription.id).await;
                 Err(err.into())
             }
         }
@@ -1710,6 +1711,43 @@ mod tests {
             assert_matches!(result, Ok(Some(user)) => {
                 assert_matches!(user.info, TunerUserInfo::Web { .. });
             });
+
+            tokio::task::yield_now().await;
+        }
+        system.shutdown().await;
+    }
+
+    #[test(tokio::test)]
+    async fn test_tuner_stop_streaming_keeps_other_subscribers() {
+        let system = System::new();
+        {
+            let config = create_config("true".to_string());
+            let mut tuner = Tuner::new(1, &config);
+
+            tuner
+                .activate(&create_channel("1"), vec![], &system)
+                .await
+                .unwrap();
+
+            let subscription1 = tuner.subscribe(&create_user(0.into()), false);
+            let subscription2 = tuner.subscribe(&create_user(0.into()), false);
+            assert!(tuner.is_subscribed(&subscription1.id));
+            assert!(tuner.is_subscribed(&subscription2.id));
+
+            // Stopping one subscription (e.g. because its Subscribe call to
+            // the broadcaster failed) must not tear down the whole session:
+            // other subscribers sharing it (e.g. a still-recording timeshift
+            // recorder) must be left untouched.
+            let result = tuner.stop_streaming(subscription1.id).await;
+            assert!(result.is_ok());
+            assert!(!tuner.is_subscribed(&subscription1.id));
+            assert!(tuner.is_subscribed(&subscription2.id));
+            assert!(tuner.is_active());
+
+            // Once the last subscriber leaves too, the tuner deactivates.
+            let result = tuner.stop_streaming(subscription2.id).await;
+            assert!(result.is_ok());
+            assert!(!tuner.is_active());
 
             tokio::task::yield_now().await;
         }
