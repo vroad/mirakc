@@ -77,6 +77,9 @@ where
         ("recorder" = String, Path, description = "Timeshift recorder name"),
         ("pre-filters" = Option<[String]>, Query, description = "Pre-filters"),
         ("post-filters" = Option<[String]>, Query, description = "post-filters"),
+        ("filter-vars" = Option<std::collections::BTreeMap<String, String>>, Query,
+         style = DeepObject, explode,
+         description = "Map of ASCII identifier names to ASCII-digit or empty values"),
         ("record" = Option<u32>, Query, description = "Timeshift record ID"),
     ),
     responses(
@@ -136,10 +139,9 @@ fn build_filters(
         .insert_str("channel_name", &recorder.service.channel.name)
         .insert("channel_type", &recorder.service.channel.channel_type)?
         .insert_str("channel", &recorder.service.channel.channel)
-        .insert("sid", &recorder.service.id.sid())?
-        .build();
+        .insert("sid", &recorder.service.id.sid())?;
 
-    let mut builder = FilterPipelineBuilder::new(data, true); // seekable by default
+    let mut builder = FilterPipelineBuilder::new(data, true, Some(&filter_setting.filter_vars)); // seekable by default
     builder.add_pre_filters(&config.pre_filters, &filter_setting.pre_filters)?;
     // The stream has already been decoded.
     builder.add_post_filters(&config.post_filters, &filter_setting.post_filters)?;

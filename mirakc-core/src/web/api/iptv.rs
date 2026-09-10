@@ -17,6 +17,13 @@ use crate::web::escape::escape;
 #[utoipa::path(
     get,
     path = "/iptv/playlist",
+    params(
+        ("pre-filters" = Option<[String]>, Query, description = "Pre-filters"),
+        ("post-filters" = Option<[String]>, Query, description = "Post-filters"),
+        ("filter-vars" = Option<std::collections::BTreeMap<String, String>>, Query,
+         style = DeepObject, explode,
+         description = "Map of ASCII identifier names to ASCII-digit or empty values"),
+    ),
     responses(
         (status = 200, description = "OK", content_type = "application/x-mpegURL", body = String),
         (status = 500, description = "Internal Server Error"),

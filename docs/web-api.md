@@ -149,6 +149,12 @@ parameter is specified.  This behavior is **incompatible** with Mirakurun.
 
 This incompatibility was fixed in `1.0.30`.
 
+## Filter variables
+
+HTTP streaming requests accept `filter-vars[NAME]=VALUE` query parameters for filters configured with
+`allow-filter-vars: true`. See [Filter variables](config.md#filter-variables) for configuration,
+examples, and validation rules.
+
 ## GET /api/version
 
 Returns the **current** version in the same JSON format as Mirakurun.
@@ -274,6 +280,7 @@ The following query parameters can be specified:
 
 * pre-filters
 * post-filters
+* filter-vars
 
 The specified query parameters are added to URLs in the playlist.
 

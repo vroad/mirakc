@@ -159,14 +159,51 @@ fn build_filters(
         .insert_str("channel_name", &channel.name)
         .insert("channel_type", &channel.channel_type)?
         .insert_str("channel", &channel.channel)
-        .insert("user", &user)?
-        .build();
+        .insert("user", &user)?;
 
-    let mut builder = FilterPipelineBuilder::new(data, false); // not seekable
+    let mut builder = FilterPipelineBuilder::new(data, false, Some(&filter_setting.filter_vars)); // not seekable
     builder.add_pre_filters(&config.pre_filters, &filter_setting.pre_filters)?;
     if !decoded && filter_setting.decode {
         builder.add_decode_filter(&config.filters.decode_filter)?;
     }
     builder.add_post_filters(&config.post_filters, &filter_setting.post_filters)?;
     Ok(builder.build())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_filters_with_filter_vars() {
+        let mut config = Config::default();
+        config.post_filters.insert(
+            "aribcap-dump".to_string(),
+            crate::config::PostFilterConfig {
+                allow_filter_vars: true,
+                command: "aribcap-dump --sid={{{filter_vars.sid}}} --emit-empty-captions"
+                    .to_string(),
+                content_type: Some("application/x-ndjson".to_string()),
+                seekable: false,
+            },
+        );
+        let filter_setting = FilterSetting {
+            decode: true,
+            pre_filters: vec![],
+            post_filters: vec!["aribcap-dump".to_string()],
+            filter_vars: std::collections::BTreeMap::from([(
+                "sid".to_string(),
+                "2056".to_string(),
+            )]),
+        };
+        let channel = channel_gr!("test", "13");
+        let user = tuner_user!(0, web; "user-id");
+
+        let (filters, content_type, seekable) =
+            build_filters(&config, &user, &filter_setting, &channel, true).unwrap();
+
+        assert_eq!(filters, ["aribcap-dump --sid=2056 --emit-empty-captions"]);
+        assert_eq!(content_type, "application/x-ndjson");
+        assert!(!seekable);
+    }
 }

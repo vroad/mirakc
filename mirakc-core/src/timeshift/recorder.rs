@@ -356,9 +356,8 @@ where
             .insert_str("channel_name", &channel.name)
             .insert("channel_type", &channel.channel_type)?
             .insert_str("channel", &channel.channel)
-            .insert("sid", &self.service.sid())?
-            .build();
-        let mut builder = FilterPipelineBuilder::new(data, false);
+            .insert("sid", &self.service.sid())?;
+        let mut builder = FilterPipelineBuilder::new(data, false, None);
         // NOTE
         // ----
         // We always decode stream before recording in order to make it easy to support seeking.

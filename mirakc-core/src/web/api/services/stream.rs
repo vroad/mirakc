@@ -196,10 +196,9 @@ fn build_filters(
         .insert("channel_type", &channel.channel_type)?
         .insert_str("channel", &channel.channel)
         .insert("user", &user)?
-        .insert("sid", &sid.value())?
-        .build();
+        .insert("sid", &sid.value())?;
 
-    let mut builder = FilterPipelineBuilder::new(data, false); // not seekable
+    let mut builder = FilterPipelineBuilder::new(data, false, Some(&filter_setting.filter_vars)); // not seekable
     builder.add_pre_filters(&config.pre_filters, &filter_setting.pre_filters)?;
     if !decoded && filter_setting.decode {
         builder.add_decode_filter(&config.filters.decode_filter)?;
@@ -207,4 +206,45 @@ fn build_filters(
     builder.add_service_filter(&config.filters.service_filter)?;
     builder.add_post_filters(&config.post_filters, &filter_setting.post_filters)?;
     Ok(builder.build())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_filters_with_filter_vars_permissions() {
+        let channel = channel_gr!("test", "13");
+        let user = tuner_user!(0, web; "user-id");
+        for allow_filter_vars in [false, true] {
+            let mut config = Config::default();
+            config.filters.decode_filter = crate::config::FilterConfig {
+                command: "decode {{{filter_vars.sid}}}".to_string(),
+                allow_filter_vars,
+            };
+            config.filters.service_filter = crate::config::FilterConfig {
+                command: "builtin {{{filter_vars.sid}}}".to_string(),
+                allow_filter_vars,
+            };
+            let setting = FilterSetting {
+                decode: true,
+                filter_vars: std::collections::BTreeMap::from([(
+                    "sid".to_string(),
+                    "2056".to_string(),
+                )]),
+                pre_filters: vec![],
+                post_filters: vec![],
+            };
+            let (commands, _, _) =
+                build_filters(&config, &user, &setting, &channel, 100.into(), false).unwrap();
+            assert_eq!(
+                commands,
+                if allow_filter_vars {
+                    ["decode 2056", "builtin 2056"]
+                } else {
+                    ["decode", "builtin"]
+                }
+            );
+        }
+    }
 }

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -600,6 +601,16 @@ pub(in crate::web) struct FilterSetting {
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub post_filters: Vec<String>, // default: empty
+
+    /// Client-defined variables for HTTP streaming filter commands.
+    /// Passed only to filter commands with `allow-filter-vars: true` in their configuration.
+    /// Names must be ASCII identifiers, and values must contain only ASCII
+    /// digits or be empty.
+    #[serde(default)]
+    #[serde(deserialize_with = "FilterSetting::deserialize_filter_vars")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[param(style = DeepObject, explode)]
+    pub filter_vars: BTreeMap<String, String>, // default: empty
 }
 
 impl FilterSetting {
@@ -621,6 +632,33 @@ impl FilterSetting {
         Err(serde::de::Error::custom(
             "The value of the decode query must be 0, 1, false or true",
         ))
+    }
+
+    fn deserialize_filter_vars<'de, D>(
+        deserializer: D,
+    ) -> Result<BTreeMap<String, String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vars = BTreeMap::<String, String>::deserialize(deserializer)?;
+        for (key, value) in vars.iter() {
+            let mut chars = key.chars();
+            let valid_key = chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !valid_key {
+                return Err(serde::de::Error::custom(
+                    "Filter variable names must be ASCII identifiers",
+                ));
+            }
+            if !value.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(serde::de::Error::custom(
+                    "Filter variable values must contain only ASCII digits or be empty",
+                ));
+            }
+        }
+        Ok(vars)
     }
 }
 

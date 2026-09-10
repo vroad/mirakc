@@ -396,6 +396,21 @@ mod tests {
     fn test_openapi_docs() {
         use utoipa::openapi::HttpMethod::*;
 
+        fn assert_filter_vars_parameter(op: &utoipa::openapi::path::Operation) {
+            let parameter = op
+                .parameters
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|parameter| parameter.name == "filter-vars")
+                .unwrap();
+            assert!(matches!(
+                parameter.style.as_ref(),
+                Some(utoipa::openapi::path::ParameterStyle::DeepObject)
+            ));
+            assert_eq!(parameter.explode, Some(true));
+        }
+
         let openapi = Docs::openapi();
         let paths = &openapi.paths;
 
@@ -429,12 +444,14 @@ mod tests {
             .unwrap();
         assert_matches!(op.operation_id, Some(ref id) => assert_eq!(id, "getChannelStream"));
         assert_matches!(op.tags, Some(ref tags) => assert!(tags.iter().any(|s| s == "stream")));
+        assert_filter_vars_parameter(op);
 
         let op = paths
             .get_path_operation("/channels/{type}/{channel}/services/{sid}/stream", Get)
             .unwrap();
         assert_matches!(op.operation_id, Some(ref id) => assert_eq!(id, "getServiceStreamByChannel"));
         assert_matches!(op.tags, Some(ref tags) => assert!(tags.iter().any(|s| s == "stream")));
+        assert_filter_vars_parameter(op);
 
         let op = paths.get_path_operation("/services", Get).unwrap();
         assert_matches!(op.operation_id, Some(ref id) => assert_eq!(id, "getServices"));
@@ -452,6 +469,7 @@ mod tests {
             .unwrap();
         assert_matches!(op.operation_id, Some(ref id) => assert_eq!(id, "getServiceStream"));
         assert_matches!(op.tags, Some(ref tags) => assert!(tags.iter().any(|s| s == "stream")));
+        assert_filter_vars_parameter(op);
 
         let op = paths.get_path_operation("/programs", Get).unwrap();
         assert_matches!(op.operation_id, Some(ref id) => assert_eq!(id, "getPrograms"));
@@ -464,5 +482,24 @@ mod tests {
             .unwrap();
         assert_matches!(op.operation_id, Some(ref id) => assert_eq!(id, "getProgramStream"));
         assert_matches!(op.tags, Some(ref tags) => assert!(tags.iter().any(|s| s == "stream")));
+        assert_filter_vars_parameter(op);
+
+        let op = paths
+            .get_path_operation("/recording/records/{id}/stream", Get)
+            .unwrap();
+        assert_filter_vars_parameter(op);
+
+        let op = paths
+            .get_path_operation("/timeshift/{recorder}/stream", Get)
+            .unwrap();
+        assert_filter_vars_parameter(op);
+
+        let op = paths
+            .get_path_operation("/timeshift/{recorder}/records/{id}/stream", Get)
+            .unwrap();
+        assert_filter_vars_parameter(op);
+
+        let op = paths.get_path_operation("/iptv/playlist", Get).unwrap();
+        assert_filter_vars_parameter(op);
     }
 }

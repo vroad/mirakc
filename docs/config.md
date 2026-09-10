@@ -751,6 +751,13 @@ The following properties can be specified in `config.yml`:
   * The command must read data from `stdin`, and output the processed data to
     `stdout`
   * An empty string means that the filter is not defined
+* allow-filter-vars (default: `false`)
+  * `true`: Make client-supplied filter variables available in the filter
+    command's template as the `filter_vars` object
+  * `false`: Do not add the `filter_vars` object to the filter command's
+    template
+  * Must be `false` for `tuner-filter`
+  * See [Filter variables](#filter-variables) for details
 * content-type
   * A string of the content-type of data output from the filter
   * Absence of this property means that the filter doesn't change the
@@ -762,11 +769,12 @@ The following properties can be specified in `config.yml`:
 
 Each filter has the following properties:
 
-| PROPERTY     | tuner-filter | decode-filter | service-filter | program-filter | pre-filter | post-filter |
-| ------------ | ------------ | ------------- | -------------- | -------------- | ---------- | ----------- |
-| command      | `?`          | `?`           | `?`            | `?`            | `?`        | `?`         |
-| seekable     | `false`      | `false`       | `false`        | `false`        | `?`        | `?`         |
-| content-type |              |               |                |                |            | `?`         |
+| PROPERTY           | tuner-filter | decode-filter | service-filter | program-filter | pre-filter | post-filter |
+| ------------------ | ------------ | ------------- | -------------- | -------------- | ---------- | ----------- |
+| command            | `?`          | `?`           | `?`            | `?`            | `?`        | `?`         |
+| seekable           | `false`      | `false`       | `false`        | `false`        | `?`        | `?`         |
+| allow-filter-vars  | `false`      | `?`           | `?`            | `?`            | `?`        | `?`         |
+| content-type       |              |               |                |                |            | `?`         |
 
 Where:
 
@@ -774,7 +782,7 @@ Where:
 * Empty cell means that the property is **not** available for the filter
 
 Each Mustache template string defined in the `command` property will be rendered
-with the following template parameters:
+with the following template variables:
 
 * tuner_index
   * The index of a tuner
@@ -820,10 +828,14 @@ with the following template parameters:
 * size
   * Size of a record in bytes
   * Available only for the record streaming
+* filter_vars
+  * A map of client-supplied filter variables
+  * Available to HTTP streaming filters with `allow-filter-vars: true`.
+  * See [Filter variables](#filter-variables) for a configuration example.
 
-Each filter has the following template parameter:
+Each filter has the following template variables:
 
-| PARAMETER    | tuner-filter | decode-filter | service-filter | program-filter | pre-filter | post-filter |
+| VARIABLE     | tuner-filter | decode-filter | service-filter | program-filter | pre-filter | post-filter |
 | ------------ | ------------ | ------------- | -------------- | -------------- | ---------- | ----------- |
 | tuner_index  | `*`          |               |                |                |            |             |
 | tuner_name   | `*`          |               |                |                |            |             |
@@ -842,18 +854,62 @@ Each filter has the following template parameter:
 | id           |              |               |                |                | `RT`       | `RT`        |
 | duration     |              |               |                |                | `T`        | `T`         |
 | size         |              |               |                |                | `T`        | `T`         |
+| filter_vars  |              | `H`           | `H`            | `H`            | `H`        | `H`         |
 
 Where:
 
-* `*` means that the template parameter is available for the filter
-* `S` means that the template parameter is available for the filter on service streaming
-* `P` means that the template parameter is available for the filter on program streaming
-* `R` means that the template parameter is available for the filter on streaming from a record
-* `T` means that the template parameter is available for the filter on streaming from a timeshift
+* `*` means that the template variable is available for the filter
+* `S` means that the template variable is available for the filter on service streaming
+* `P` means that the template variable is available for the filter on program streaming
+* `R` means that the template variable is available for the filter on streaming from a record
+* `T` means that the template variable is available for the filter on streaming from a timeshift
   record
-* `L` means that the template parameter is available for the filter on streaming from a timeshift
+* `L` means that the template variable is available for the filter on streaming from a timeshift
   recorder
-* Empty cell means that the template parameter is **NOT** available for the filter
+* `H` means that the template variable is available for the filter on any HTTP streaming endpoint
+* Empty cell means that the template variable is **NOT** available for the filter
+
+### Filter variables
+
+If the filters set in the HTTP request have `allow-filter-vars: true` set in their configuration,
+`filter-vars` query parameters are passed to the filter's Mustache template as the `filter_vars`
+object.
+
+#### Example
+
+For example, given this post-filters entry:
+
+```yaml
+post-filters:
+  aribcap-dump:
+    allow-filter-vars: true
+    command: aribcap-dump --sid={{{filter_vars.sid}}} --emit-empty-captions
+    content-type: application/x-ndjson
+```
+
+The following request renders its command as `aribcap-dump --sid=2056 --emit-empty-captions`:
+
+```sh
+curl --globoff \
+  --unix-socket /run/mirakc/mirakc.sock \
+  'http://localhost/api/channels/GR/13/stream?post-filters[]=aribcap-dump&filter-vars[sid]=2056'
+```
+
+#### Validation rules
+
+Consider the following `curl` command (`NAME` is the placeholder for the variable name and `VALUE`
+is the placeholder for the variable value):
+
+```sh
+curl --globoff \
+  --unix-socket /run/mirakc/mirakc.sock \
+  'http://localhost/api/channels/GR/13/stream?post-filters[]=aribcap-dump&filter-vars[NAME]=VALUE'
+```
+
+`NAME` must match the regular expression `^[A-Za-z_][A-Za-z0-9_]*$`, and `VALUE` must match the
+regular expression `^[0-9]*$` (zero or more digits).
+
+All filters with `allow-filter-vars: true` share the same variables within a request.
 
 ### filters.tuner-filter
 

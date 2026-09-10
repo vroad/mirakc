@@ -1114,8 +1114,8 @@ where
             .map(|audio| audio.component_tag)
             .collect();
 
-        let mut builder = mustache::MapBuilder::new();
-        builder = builder
+        let mut data = mustache::MapBuilder::new();
+        data = data
             .insert_str("channel_name", &schedule.service.channel.name)
             .insert("channel_type", &schedule.service.channel.channel_type)?
             .insert_str("channel", &schedule.service.channel.channel)
@@ -1126,9 +1126,8 @@ where
             .insert("clock_time", &clock.time)?
             .insert("video_tags", &video_tags)?
             .insert("audio_tags", &audio_tags)?;
-        let data = builder.build();
 
-        let mut builder = FilterPipelineBuilder::new(data, false);
+        let mut builder = FilterPipelineBuilder::new(data, false, None);
         builder.add_pre_filters(&self.config.pre_filters, &schedule.options.pre_filters)?;
         if !stream.is_decoded() {
             builder.add_decode_filter(&self.config.filters.decode_filter)?;

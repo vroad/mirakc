@@ -84,6 +84,9 @@ where
         TimeshiftRecordPath,
         ("pre-filters" = Option<[String]>, Query, description = "Pre-filters"),
         ("post-filters" = Option<[String]>, Query, description = "post-filters"),
+        ("filter-vars" = Option<std::collections::BTreeMap<String, String>>, Query,
+         style = DeepObject, explode,
+         description = "Map of ASCII identifier names to ASCII-digit or empty values"),
     ),
     responses(
         (status = 200, description = "OK"),
@@ -176,10 +179,9 @@ fn build_filters(
         .insert("audio_tags", &audio_tags)?
         .insert("id", &record.id)?
         .insert("duration", &duration.num_seconds())?
-        .insert("size", &record.size)?
-        .build();
+        .insert("size", &record.size)?;
 
-    let mut builder = FilterPipelineBuilder::new(data, true); // seekable by default
+    let mut builder = FilterPipelineBuilder::new(data, true, Some(&filter_setting.filter_vars)); // seekable by default
     builder.add_pre_filters(&config.pre_filters, &filter_setting.pre_filters)?;
     // The stream has already been decoded.
     builder.add_post_filters(&config.post_filters, &filter_setting.post_filters)?;

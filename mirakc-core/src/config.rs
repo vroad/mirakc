@@ -693,6 +693,7 @@ pub struct FiltersConfig {
 impl FiltersConfig {
     fn default_service_filter() -> FilterConfig {
         FilterConfig {
+            allow_filter_vars: false,
             command: "mirakc-arib filter-service --sid={{{sid}}}".to_string(),
         }
     }
@@ -711,6 +712,7 @@ impl FiltersConfig {
         // starts when this option is specified.  See masnagam/rust-case-studies
         // for details about the issue#1313.
         FilterConfig {
+            allow_filter_vars: false,
             command: "mirakc-arib filter-program --sid={{{sid}}} --eid={{{eid}}} \
                       --clock-pid={{{clock_pid}}} --clock-pcr={{{clock_pcr}}} \
                       --clock-time={{{clock_time}}} --end-margin=2000\
@@ -723,6 +725,10 @@ impl FiltersConfig {
     }
 
     fn validate(&self) {
+        validate!(
+            !self.tuner_filter.allow_filter_vars,
+            "config.filters.tuner-filter.allow-filter-vars: must be false"
+        );
         self.tuner_filter.validate("filters", "tuner-filter", false);
         self.service_filter
             .validate("filters", "service-filter", true);
@@ -749,6 +755,8 @@ impl Default for FiltersConfig {
 #[serde(deny_unknown_fields)]
 pub struct FilterConfig {
     #[serde(default)]
+    pub allow_filter_vars: bool,
+    #[serde(default)]
     pub command: String,
 }
 
@@ -773,6 +781,8 @@ impl FilterConfig {
 #[serde(deny_unknown_fields)]
 pub struct PreFilterConfig {
     #[serde(default)]
+    pub allow_filter_vars: bool,
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub seekable: bool,
@@ -795,6 +805,8 @@ impl PreFilterConfig {
 #[serde(rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
 pub struct PostFilterConfig {
+    #[serde(default)]
+    pub allow_filter_vars: bool,
     #[serde(default)]
     pub command: String,
     #[serde(default)]
@@ -2670,6 +2682,93 @@ mod tests {
             channel: "".to_string(),
         }];
         config.validate(0);
+    }
+
+    #[test]
+    fn test_allow_filter_vars_deserialization() {
+        macro_rules! check {
+            ($ty:ty) => {
+                assert!(!<$ty>::default().allow_filter_vars);
+                for (yaml, toml, expected) in [
+                    ("{}", "", false),
+                    (
+                        "allow-filter-vars: false",
+                        "allow-filter-vars = false",
+                        false,
+                    ),
+                    ("allow-filter-vars: true", "allow-filter-vars = true", true),
+                ] {
+                    assert_eq!(
+                        serde_norway::from_str::<$ty>(yaml)
+                            .unwrap()
+                            .allow_filter_vars,
+                        expected
+                    );
+                    assert_eq!(
+                        toml::from_str::<$ty>(toml).unwrap().allow_filter_vars,
+                        expected
+                    );
+                }
+                for value in ["\"true\"", "1", "[]", "{}"] {
+                    assert!(
+                        serde_norway::from_str::<$ty>(&format!("allow-filter-vars: {value}"))
+                            .is_err()
+                    );
+                    assert!(
+                        toml::from_str::<$ty>(&format!("allow-filter-vars = {value}")).is_err()
+                    );
+                }
+            };
+        }
+        check!(FilterConfig);
+        check!(PreFilterConfig);
+        check!(PostFilterConfig);
+    }
+
+    #[test]
+    fn test_tuner_filter_allow_filter_vars_validation() {
+        for command in ["", "cat"] {
+            for yaml in ["{}", "allow-filter-vars: false", "allow-filter-vars: true"] {
+                let mut config = FiltersConfig::default();
+                config.tuner_filter = serde_norway::from_str(yaml).unwrap();
+                config.tuner_filter.command = command.to_string();
+                let result = std::panic::catch_unwind(|| config.validate());
+                if config.tuner_filter.allow_filter_vars {
+                    let error = result.unwrap_err();
+                    let message = error
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| error.downcast_ref::<&str>().copied())
+                        .unwrap();
+                    assert_eq!(
+                        message,
+                        "config.filters.tuner-filter.allow-filter-vars: must be false"
+                    );
+                } else {
+                    result.unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_builtin_filter_defaults() {
+        let config = FiltersConfig::default();
+        assert!(!config.service_filter.allow_filter_vars);
+        assert!(!config.program_filter.allow_filter_vars);
+        assert_eq!(
+            config.service_filter.command,
+            "mirakc-arib filter-service --sid={{{sid}}}"
+        );
+        assert_eq!(
+            config.program_filter.command,
+            "mirakc-arib filter-program --sid={{{sid}}} --eid={{{eid}}} \
+             --clock-pid={{{clock_pid}}} --clock-pcr={{{clock_pcr}}} \
+             --clock-time={{{clock_time}}} --end-margin=2000\
+             {{#video_tags}} --video-tag={{{.}}}{{/video_tags}}\
+             {{#audio_tags}} --audio-tag={{{.}}}{{/audio_tags}}\
+             {{#wait_until}} --wait-until={{{.}}}{{/wait_until}}"
+        );
     }
 
     #[test]

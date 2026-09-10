@@ -1322,7 +1322,10 @@ http://mirakc:40772/api/services/1/stream?decode=true
 "#
     );
 
-    let res = get(&format!("{endpoint}?post-filters[]=mp4")).await;
+    let res = get(&format!(
+        "{endpoint}?post-filters[]=mp4&filter-vars[sid]=2056"
+    ))
+    .await;
     assert_eq!(res.status(), StatusCode::OK);
     assert_matches!(res.headers().get(CONTENT_TYPE), Some(v) => {
         assert_eq!(v, "application/x-mpegurl; charset=UTF-8");
@@ -1333,7 +1336,7 @@ http://mirakc:40772/api/services/1/stream?decode=true
         r#"#EXTM3U
 #KODIPROP:mimetype=video/mp4
 #EXTINF:-1 tvg-id="1" tvg-logo="http://mirakc:40772/api/services/1/logo" group-title="GR", test
-http://mirakc:40772/api/services/1/stream?decode=true&post-filters[0]=mp4
+http://mirakc:40772/api/services/1/stream?decode=true&post-filters[0]=mp4&filter-vars[sid]=2056
 "#
     );
 }
@@ -1674,6 +1677,7 @@ async fn test_filter_setting() {
             assert!(v.decode);
             assert!(v.pre_filters.is_empty());
             assert!(v.post_filters.is_empty());
+            assert!(v.filter_vars.is_empty());
         })
         .await,
         StatusCode::OK
@@ -1858,6 +1862,52 @@ async fn test_filter_setting() {
         .await,
         StatusCode::OK
     );
+
+    assert_eq!(
+        do_test("filter-vars[sid]=%32%30%35%36", |Qs(v)| async move {
+            assert_eq!(v.filter_vars.get("sid").map(String::as_str), Some("2056"));
+        })
+        .await,
+        StatusCode::OK
+    );
+
+    assert_eq!(
+        do_test(
+            "filter-vars[sid]=2056&filter-vars[_eid2]=42",
+            |Qs(v)| async move {
+                assert_eq!(v.filter_vars.len(), 2);
+                assert_eq!(v.filter_vars.get("sid").map(String::as_str), Some("2056"));
+                assert_eq!(v.filter_vars.get("_eid2").map(String::as_str), Some("42"));
+            }
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    assert_eq!(
+        do_test("filter-vars[sid]=", |Qs(v)| async move {
+            assert_eq!(v.filter_vars.get("sid").map(String::as_str), Some(""));
+        })
+        .await,
+        StatusCode::OK
+    );
+
+    for query in [
+        "filter-vars[0sid]=2056",
+        "filter-vars[sid%2Dx]=2056",
+        "filter-vars[%C3%A9]=2056",
+        "filter-vars[sid]=20%2D56",
+        "filter-vars[sid]=abc",
+        "filter-vars[sid]=%EF%BC%91",
+    ] {
+        assert_eq!(
+            do_test(query, |_| async move {
+                unreachable!();
+            })
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+    }
 }
 
 async fn get(endpoint: &str) -> Response {

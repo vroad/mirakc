@@ -209,8 +209,8 @@ fn build_filters(
         .map(|audio| audio.component_tag)
         .collect();
 
-    let mut builder = mustache::MapBuilder::new();
-    builder = builder
+    let mut data = mustache::MapBuilder::new();
+    data = data
         .insert_str("channel_name", &service.channel.name)
         .insert("channel_type", &service.channel.channel_type)?
         .insert_str("channel", &service.channel.channel)
@@ -229,11 +229,10 @@ fn build_filters(
         // than 24h.
         let duration = Duration::try_seconds(max_start_delay.as_secs() as i64).unwrap();
         let wait_until = program.start_at.unwrap() + duration;
-        builder = builder.insert("wait_until", &wait_until.timestamp_millis())?;
+        data = data.insert("wait_until", &wait_until.timestamp_millis())?;
     }
-    let data = builder.build();
 
-    let mut builder = FilterPipelineBuilder::new(data, false); // not seekable
+    let mut builder = FilterPipelineBuilder::new(data, false, Some(&filter_setting.filter_vars)); // not seekable
     builder.add_pre_filters(&config.pre_filters, &filter_setting.pre_filters)?;
     if !decoded && filter_setting.decode {
         builder.add_decode_filter(&config.filters.decode_filter)?;
@@ -241,4 +240,52 @@ fn build_filters(
     builder.add_program_filter(&config.filters.program_filter)?;
     builder.add_post_filters(&config.post_filters, &filter_setting.post_filters)?;
     Ok(builder.build())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_filters_with_filter_vars_permissions() {
+        let channel = channel_gr!("test", "13");
+        let user = tuner_user!(0, web; "user-id");
+        let service = service!(100_u64, "test", channel);
+        let program = program!(100_00001_u64);
+        let clock = Clock {
+            pid: 1,
+            pcr: 2,
+            time: 3,
+        };
+        for allow_filter_vars in [false, true] {
+            let mut config = Config::default();
+            config.filters.decode_filter = crate::config::FilterConfig {
+                command: "decode {{{filter_vars.sid}}}".to_string(),
+                allow_filter_vars,
+            };
+            config.filters.program_filter = crate::config::FilterConfig {
+                command: "builtin {{{filter_vars.sid}}}".to_string(),
+                allow_filter_vars,
+            };
+            let setting = FilterSetting {
+                decode: true,
+                filter_vars: std::collections::BTreeMap::from([(
+                    "sid".to_string(),
+                    "2056".to_string(),
+                )]),
+                pre_filters: vec![],
+                post_filters: vec![],
+            };
+            let (commands, _, _) =
+                build_filters(&config, &user, &setting, &clock, &service, &program, false).unwrap();
+            assert_eq!(
+                commands,
+                if allow_filter_vars {
+                    ["decode 2056", "builtin 2056"]
+                } else {
+                    ["decode", "builtin"]
+                }
+            );
+        }
+    }
 }
