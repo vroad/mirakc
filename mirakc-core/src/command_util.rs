@@ -180,18 +180,23 @@ where
         envs: &[(&str, String)],
         logging: CommandLogging,
     ) -> Result<(), Error> {
-        let input = if self.stdout.is_none() {
-            Stdio::piped()
-        } else {
-            self.stdout.take().unwrap().try_into()?
+        let input = match self.stdout.take() {
+            Some(stdout) => stdout
+                .try_into()
+                .inspect_err(|err| tracing::error!(%err, command, "Failed to take over stdout"))?,
+            None => Stdio::piped(),
         };
 
-        let mut process = CommandBuilder::new(&command)?
-            .stdin(input)
-            .stdout(Stdio::piped())
-            .envs(envs.iter().cloned())
-            .logging(logging)
-            .spawn()?;
+        let mut process = CommandBuilder::new(&command)
+            .and_then(|mut builder| {
+                builder
+                    .stdin(input)
+                    .stdout(Stdio::piped())
+                    .envs(envs.iter().cloned())
+                    .logging(logging)
+                    .spawn()
+            })
+            .inspect_err(|err| tracing::error!(%err, command, "Failed to spawn"))?;
         let pid = process.id().unwrap();
 
         if self.stdin.is_none() {
